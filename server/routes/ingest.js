@@ -7,7 +7,7 @@
 
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const { getDatabase } = require('../database/init');
+const { dbRun, dbGet, dbAll } = require('../database/init');
 
 const router = express.Router();
 
@@ -32,45 +32,36 @@ router.post('/', (req, res) => {
         const normalizedLog = normalizePayload(payload);
 
         // Store in database
-        const db = getDatabase();
-        
-        const insertLog = db.prepare(`
-            INSERT INTO inference_logs (id, conversation_id, request_id, model, provider, status, latency_ms, input_tokens, output_tokens, total_tokens, input_preview, output_preview, error_message, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
         const logId = uuidv4();
-        insertLog.run(
-            logId,
-            normalizedLog.conversationId,
-            normalizedLog.requestId,
-            normalizedLog.model,
-            normalizedLog.provider,
-            normalizedLog.status,
-            normalizedLog.latencyMs,
-            normalizedLog.inputTokens,
-            normalizedLog.outputTokens,
-            normalizedLog.totalTokens,
-            normalizedLog.inputPreview,
-            normalizedLog.outputPreview,
-            normalizedLog.errorMessage,
-            normalizedLog.timestamp
+        dbRun(
+            `INSERT INTO inference_logs (id, conversation_id, request_id, model, provider, status, latency_ms, input_tokens, output_tokens, total_tokens, input_preview, output_preview, error_message, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                logId,
+                normalizedLog.conversationId,
+                normalizedLog.requestId,
+                normalizedLog.model,
+                normalizedLog.provider,
+                normalizedLog.status,
+                normalizedLog.latencyMs,
+                normalizedLog.inputTokens,
+                normalizedLog.outputTokens,
+                normalizedLog.totalTokens,
+                normalizedLog.inputPreview,
+                normalizedLog.outputPreview,
+                normalizedLog.errorMessage,
+                normalizedLog.timestamp
+            ]
         );
 
         // Store additional metadata if present
         if (normalizedLog.metadata && Object.keys(normalizedLog.metadata).length > 0) {
-            const insertMeta = db.prepare(`
-                INSERT INTO inference_metadata (inference_log_id, key, value)
-                VALUES (?, ?, ?)
-            `);
-
-            const insertMany = db.transaction((entries) => {
-                for (const [key, value] of entries) {
-                    insertMeta.run(logId, key, String(value));
-                }
-            });
-
-            insertMany(Object.entries(normalizedLog.metadata));
+            for (const [key, value] of Object.entries(normalizedLog.metadata)) {
+                dbRun(
+                    `INSERT INTO inference_metadata (inference_log_id, key, value) VALUES (?, ?, ?)`,
+                    [logId, key, String(value)]
+                );
+            }
         }
 
         res.status(201).json({ 

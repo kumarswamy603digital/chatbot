@@ -9,7 +9,7 @@
  */
 
 const express = require('express');
-const { getDatabase } = require('../database/init');
+const { dbGet, dbAll } = require('../database/init');
 
 const router = express.Router();
 
@@ -19,16 +19,14 @@ const router = express.Router();
  */
 router.get('/stats', (req, res) => {
     try {
-        const db = getDatabase();
+        const totalRequests = dbGet('SELECT COUNT(*) as count FROM inference_logs');
+        const successCount = dbGet("SELECT COUNT(*) as count FROM inference_logs WHERE status = 'success'");
+        const errorCount = dbGet("SELECT COUNT(*) as count FROM inference_logs WHERE status = 'error'");
+        const timeoutCount = dbGet("SELECT COUNT(*) as count FROM inference_logs WHERE status = 'timeout'");
 
-        const totalRequests = db.prepare('SELECT COUNT(*) as count FROM inference_logs').get();
-        const successCount = db.prepare("SELECT COUNT(*) as count FROM inference_logs WHERE status = 'success'").get();
-        const errorCount = db.prepare("SELECT COUNT(*) as count FROM inference_logs WHERE status = 'error'").get();
-        const timeoutCount = db.prepare("SELECT COUNT(*) as count FROM inference_logs WHERE status = 'timeout'").get();
-
-        const avgLatency = db.prepare('SELECT AVG(latency_ms) as avg, MIN(latency_ms) as min, MAX(latency_ms) as max FROM inference_logs').get();
-        const totalTokens = db.prepare('SELECT SUM(total_tokens) as total, SUM(input_tokens) as input, SUM(output_tokens) as output FROM inference_logs').get();
-        const totalConversations = db.prepare('SELECT COUNT(*) as count FROM conversations').get();
+        const avgLatency = dbGet('SELECT AVG(latency_ms) as avg, MIN(latency_ms) as min, MAX(latency_ms) as max FROM inference_logs');
+        const totalTokens = dbGet('SELECT SUM(total_tokens) as total, SUM(input_tokens) as input, SUM(output_tokens) as output FROM inference_logs');
+        const totalConversations = dbGet('SELECT COUNT(*) as count FROM conversations');
 
         res.json({
             requests: {
@@ -63,10 +61,9 @@ router.get('/stats', (req, res) => {
  */
 router.get('/latency', (req, res) => {
     try {
-        const db = getDatabase();
         const hours = parseInt(req.query.hours) || 24;
 
-        const data = db.prepare(`
+        const data = dbAll(`
             SELECT 
                 strftime('%Y-%m-%d %H:00:00', timestamp) as hour,
                 AVG(latency_ms) as avg_latency,
@@ -74,10 +71,10 @@ router.get('/latency', (req, res) => {
                 MAX(latency_ms) as max_latency,
                 COUNT(*) as request_count
             FROM inference_logs
-            WHERE timestamp >= datetime('now', '-${hours} hours')
+            WHERE timestamp >= datetime('now', '-' || ? || ' hours')
             GROUP BY hour
             ORDER BY hour ASC
-        `).all();
+        `, [hours]);
 
         res.json(data);
     } catch (error) {
@@ -91,20 +88,19 @@ router.get('/latency', (req, res) => {
  */
 router.get('/throughput', (req, res) => {
     try {
-        const db = getDatabase();
         const minutes = parseInt(req.query.minutes) || 60;
 
-        const data = db.prepare(`
+        const data = dbAll(`
             SELECT 
                 strftime('%Y-%m-%d %H:%M:00', timestamp) as minute,
                 COUNT(*) as requests,
                 SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success,
                 SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors
             FROM inference_logs
-            WHERE timestamp >= datetime('now', '-${minutes} minutes')
+            WHERE timestamp >= datetime('now', '-' || ? || ' minutes')
             GROUP BY minute
             ORDER BY minute ASC
-        `).all();
+        `, [minutes]);
 
         res.json(data);
     } catch (error) {
@@ -118,17 +114,16 @@ router.get('/throughput', (req, res) => {
  */
 router.get('/errors', (req, res) => {
     try {
-        const db = getDatabase();
         const limit = parseInt(req.query.limit) || 20;
 
-        const errors = db.prepare(`
+        const errors = dbAll(`
             SELECT id, request_id, model, provider, status, latency_ms, 
                    error_message, input_preview, timestamp
             FROM inference_logs
             WHERE status IN ('error', 'timeout')
             ORDER BY timestamp DESC
             LIMIT ?
-        `).all(limit);
+        `, [limit]);
 
         res.json(errors);
     } catch (error) {
@@ -142,7 +137,6 @@ router.get('/errors', (req, res) => {
  */
 router.get('/logs', (req, res) => {
     try {
-        const db = getDatabase();
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 50;
         const offset = (page - 1) * limit;
@@ -151,17 +145,20 @@ router.get('/logs', (req, res) => {
         let query = 'SELECT * FROM inference_logs';
         let countQuery = 'SELECT COUNT(*) as total FROM inference_logs';
         const params = [];
+        const countParams = [];
 
         if (status && ['success', 'error', 'timeout'].includes(status)) {
             query += ' WHERE status = ?';
             countQuery += ' WHERE status = ?';
             params.push(status);
+            countParams.push(status);
         }
 
         query += ' ORDER BY timestamp DESC LIMIT ? OFFSET ?';
+        params.push(limit, offset);
 
-        const total = db.prepare(countQuery).get(...params);
-        const logs = db.prepare(query).all(...params, limit, offset);
+        const total = dbGet(countQuery, countParams);
+        const logs = dbAll(query, params);
 
         res.json({
             logs,
@@ -183,9 +180,7 @@ router.get('/logs', (req, res) => {
  */
 router.get('/models', (req, res) => {
     try {
-        const db = getDatabase();
-
-        const data = db.prepare(`
+        const data = dbAll(`
             SELECT 
                 model,
                 provider,
@@ -197,7 +192,7 @@ router.get('/models', (req, res) => {
             FROM inference_logs
             GROUP BY model, provider
             ORDER BY total_requests DESC
-        `).all();
+        `);
 
         res.json(data);
     } catch (error) {
