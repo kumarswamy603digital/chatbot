@@ -13,7 +13,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { getDatabase } = require('./database/init');
+const { initDatabase } = require('./database/init');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -22,16 +22,7 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Initialize database on startup
-getDatabase();
-console.log('[Server] Database initialized');
-
-// API Routes
-app.use('/api/chat', require('./routes/chat'));
-app.use('/api/ingest', require('./routes/ingest'));
-app.use('/api/dashboard', require('./routes/dashboard'));
-
-// Health check
+// Health check (available before DB init)
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'healthy', 
@@ -40,17 +31,29 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Serve frontend in production
-if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(path.join(__dirname, '../frontend/dist')));
-    app.get('*', (req, res) => {
-        res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
-    });
-}
+// Start server with async database initialization
+async function startServer() {
+    try {
+        // Initialize database (async for sql.js)
+        await initDatabase();
+        console.log('[Server] Database initialized');
 
-// Start server
-app.listen(PORT, () => {
-    console.log(`
+        // API Routes
+        app.use('/api/chat', require('./routes/chat'));
+        app.use('/api/ingest', require('./routes/ingest'));
+        app.use('/api/dashboard', require('./routes/dashboard'));
+
+        // Serve frontend in production
+        if (process.env.NODE_ENV === 'production') {
+            app.use(express.static(path.join(__dirname, '../frontend/dist')));
+            app.get('*', (req, res) => {
+                res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
+            });
+        }
+
+        // Start server
+        app.listen(PORT, () => {
+            console.log(`
 ╔══════════════════════════════════════════════════╗
 ║   LLM Inference Logger - Server Running         ║
 ╠══════════════════════════════════════════════════╣
@@ -59,7 +62,14 @@ app.listen(PORT, () => {
 ║   Ingest:     http://localhost:${PORT}/api/ingest   ║
 ║   Dashboard:  http://localhost:${PORT}/api/dashboard║
 ╚══════════════════════════════════════════════════╝
-    `);
-});
+            `);
+        });
+    } catch (error) {
+        console.error('[Server] Failed to start:', error);
+        process.exit(1);
+    }
+}
+
+startServer();
 
 module.exports = app;

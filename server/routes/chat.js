@@ -9,7 +9,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { InferenceLogger } = require('../sdk/inference-logger');
-const { getDatabase } = require('../database/init');
+const { dbRun, dbGet, dbAll } = require('../database/init');
 
 const router = express.Router();
 
@@ -20,7 +20,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const logger = new InferenceLogger({
     ingestionUrl: `http://localhost:${process.env.PORT || 3001}/api/ingest`,
     provider: 'google',
-    model: 'gemini-2.0-flash'
+    model: 'gemini-2.5-flash-lite'
 });
 
 /**
@@ -35,35 +35,35 @@ router.post('/message', async (req, res) => {
             return res.status(400).json({ error: 'Message is required' });
         }
 
-        const db = getDatabase();
         let convId = conversationId;
 
         // Create new conversation if none exists
         if (!convId) {
             convId = uuidv4();
-            db.prepare(`
-                INSERT INTO conversations (id, title, status) VALUES (?, ?, 'active')
-            `).run(convId, message.substring(0, 50));
+            dbRun(
+                `INSERT INTO conversations (id, title, status) VALUES (?, ?, 'active')`,
+                [convId, message.substring(0, 50)]
+            );
         }
 
         // Check conversation status
-        const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(convId);
+        const conv = dbGet('SELECT * FROM conversations WHERE id = ?', [convId]);
         if (conv && conv.status === 'cancelled') {
             return res.status(400).json({ error: 'Conversation has been cancelled' });
         }
 
         // Store user message
         const userMsgId = uuidv4();
-        db.prepare(`
-            INSERT INTO chat_messages (id, conversation_id, role, content) VALUES (?, ?, 'user', ?)
-        `).run(userMsgId, convId, message);
+        dbRun(
+            `INSERT INTO chat_messages (id, conversation_id, role, content) VALUES (?, ?, 'user', ?)`,
+            [userMsgId, convId, message]
+        );
 
         // Get conversation history for context
-        const history = db.prepare(`
-            SELECT role, content FROM chat_messages 
-            WHERE conversation_id = ? 
-            ORDER BY created_at ASC
-        `).all(convId);
+        const history = dbAll(
+            `SELECT role, content FROM chat_messages WHERE conversation_id = ? ORDER BY created_at ASC`,
+            [convId]
+        );
 
         // Build chat history for Gemini (exclude the current message, it goes as the new input)
         const chatHistory = history.slice(0, -1).map(msg => ({
@@ -71,8 +71,8 @@ router.post('/message', async (req, res) => {
             parts: [{ text: msg.content }]
         }));
 
-        // Call Gemini API with the inference logger SDK
-        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+        // Call Gemini API with the inference logger SDK (using free-tier gemini-2.5-flash-lite)
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
         
         const { result, outputText } = await logger.wrap(
             async () => {
@@ -83,7 +83,7 @@ router.post('/message', async (req, res) => {
             {
                 conversationId: convId,
                 inputText: message,
-                model: 'gemini-2.0-flash',
+                model: 'gemini-2.5-flash-lite',
                 metadata: {
                     messageCount: history.length,
                     conversationId: convId
@@ -93,14 +93,16 @@ router.post('/message', async (req, res) => {
 
         // Store assistant response
         const assistantMsgId = uuidv4();
-        db.prepare(`
-            INSERT INTO chat_messages (id, conversation_id, role, content) VALUES (?, ?, 'assistant', ?)
-        `).run(assistantMsgId, convId, outputText);
+        dbRun(
+            `INSERT INTO chat_messages (id, conversation_id, role, content) VALUES (?, ?, 'assistant', ?)`,
+            [assistantMsgId, convId, outputText]
+        );
 
         // Update conversation timestamp
-        db.prepare(`
-            UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?
-        `).run(convId);
+        dbRun(
+            `UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            [convId]
+        );
 
         res.json({
             conversationId: convId,
@@ -126,8 +128,7 @@ router.post('/message', async (req, res) => {
  */
 router.get('/conversations', (req, res) => {
     try {
-        const db = getDatabase();
-        const conversations = db.prepare(`
+        const conversations = dbAll(`
             SELECT c.*, 
                    COUNT(m.id) as message_count,
                    MAX(m.created_at) as last_message_at
@@ -135,7 +136,7 @@ router.get('/conversations', (req, res) => {
             LEFT JOIN chat_messages m ON c.id = m.conversation_id
             GROUP BY c.id
             ORDER BY c.updated_at DESC
-        `).all();
+        `);
 
         res.json(conversations);
     } catch (error) {
@@ -149,18 +150,16 @@ router.get('/conversations', (req, res) => {
  */
 router.get('/conversations/:id', (req, res) => {
     try {
-        const db = getDatabase();
-        const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(req.params.id);
+        const conversation = dbGet('SELECT * FROM conversations WHERE id = ?', [req.params.id]);
         
         if (!conversation) {
             return res.status(404).json({ error: 'Conversation not found' });
         }
 
-        const messages = db.prepare(`
-            SELECT * FROM chat_messages 
-            WHERE conversation_id = ? 
-            ORDER BY created_at ASC
-        `).all(req.params.id);
+        const messages = dbAll(
+            `SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY created_at ASC`,
+            [req.params.id]
+        );
 
         res.json({ ...conversation, messages });
     } catch (error) {
@@ -174,10 +173,10 @@ router.get('/conversations/:id', (req, res) => {
  */
 router.patch('/conversations/:id/cancel', (req, res) => {
     try {
-        const db = getDatabase();
-        const result = db.prepare(`
-            UPDATE conversations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?
-        `).run(req.params.id);
+        const result = dbRun(
+            `UPDATE conversations SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            [req.params.id]
+        );
 
         if (result.changes === 0) {
             return res.status(404).json({ error: 'Conversation not found' });
@@ -195,10 +194,10 @@ router.patch('/conversations/:id/cancel', (req, res) => {
  */
 router.patch('/conversations/:id/resume', (req, res) => {
     try {
-        const db = getDatabase();
-        const result = db.prepare(`
-            UPDATE conversations SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?
-        `).run(req.params.id);
+        const result = dbRun(
+            `UPDATE conversations SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            [req.params.id]
+        );
 
         if (result.changes === 0) {
             return res.status(404).json({ error: 'Conversation not found' });

@@ -15,7 +15,7 @@ class InferenceLogger {
     constructor(options = {}) {
         this.ingestionUrl = options.ingestionUrl || 'http://localhost:3001/api/ingest';
         this.provider = options.provider || 'google';
-        this.model = options.model || 'gemini-2.0-flash';
+        this.model = options.model || 'gemini-2.5-flash-lite';
         this.maxPreviewLength = options.maxPreviewLength || 500;
         this.enabled = options.enabled !== false;
         this.onError = options.onError || ((err) => console.error('[InferenceLogger] Error:', err.message));
@@ -41,15 +41,19 @@ class InferenceLogger {
         try {
             result = await apiCall();
 
-            // Extract token usage from Gemini response if available
-            if (result && result.usageMetadata) {
+            // Extract token usage from Gemini response
+            if (result && result.response && result.response.usageMetadata) {
+                inputTokens = result.response.usageMetadata.promptTokenCount || 0;
+                outputTokens = result.response.usageMetadata.candidatesTokenCount || 0;
+                totalTokens = result.response.usageMetadata.totalTokenCount || 0;
+            } else if (result && result.usageMetadata) {
                 inputTokens = result.usageMetadata.promptTokenCount || 0;
                 outputTokens = result.usageMetadata.candidatesTokenCount || 0;
                 totalTokens = result.usageMetadata.totalTokenCount || 0;
             }
 
             // Extract output text
-            if (result && result.response) {
+            if (result && result.response && typeof result.response.text === 'function') {
                 outputText = result.response.text() || '';
             } else if (result && typeof result.text === 'function') {
                 outputText = result.text() || '';

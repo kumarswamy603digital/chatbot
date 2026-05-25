@@ -6,6 +6,7 @@ function ChatPage() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showChat, setShowChat] = useState(false);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -32,6 +33,7 @@ function ChatPage() {
       const data = await res.json();
       setActiveConv(data);
       setMessages(data.messages || []);
+      setShowChat(true);
     } catch (err) {
       console.error('Failed to load conversation:', err);
     }
@@ -40,6 +42,7 @@ function ChatPage() {
   const startNewChat = () => {
     setActiveConv(null);
     setMessages([]);
+    setShowChat(true);
   };
 
   const sendMessage = async (e) => {
@@ -66,7 +69,7 @@ function ChatPage() {
       if (res.ok) {
         setMessages(prev => [...prev, data.message]);
         if (!activeConv) {
-          setActiveConv({ id: data.conversationId, title: userMessage.substring(0, 50) });
+          setActiveConv({ id: data.conversationId, title: userMessage.substring(0, 50), status: 'active' });
         }
         fetchConversations();
       } else {
@@ -141,7 +144,7 @@ function ChatPage() {
       </div>
 
       <div className="chat-area">
-        {activeConv || messages.length > 0 ? (
+        {showChat ? (
           <>
             <div className="chat-header">
               <h2>{activeConv?.title || 'New Conversation'}</h2>
@@ -159,6 +162,14 @@ function ChatPage() {
               </div>
             </div>
             <div className="messages-container">
+              {messages.length === 0 && (
+                <div className="empty-state">
+                  <div style={{ textAlign: 'center' }}>
+                    <p style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>✨</p>
+                    <p>Type a message below to start chatting!</p>
+                  </div>
+                </div>
+              )}
               {messages.map((msg, idx) => (
                 <div key={msg.id || idx} className={`message ${msg.role}`}>
                   {msg.content}
@@ -174,6 +185,7 @@ function ChatPage() {
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={isCancelled ? 'Conversation cancelled - resume to continue' : 'Type a message...'}
                 disabled={loading || isCancelled}
+                autoFocus
               />
               <button type="submit" className="btn-send" disabled={loading || !input.trim() || isCancelled}>
                 Send
