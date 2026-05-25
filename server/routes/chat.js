@@ -20,7 +20,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const logger = new InferenceLogger({
     ingestionUrl: `http://localhost:${process.env.PORT || 3001}/api/ingest`,
     provider: 'google',
-    model: 'gemini-2.0-flash'
+    model: 'gemini-2.5-flash-lite'
 });
 
 /**
@@ -71,8 +71,8 @@ router.post('/message', async (req, res) => {
             parts: [{ text: msg.content }]
         }));
 
-        // Call Gemini API with the inference logger SDK
-        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+        // Call Gemini API with the inference logger SDK (using free-tier gemini-2.5-flash-lite)
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
         
         const { result, outputText } = await logger.wrap(
             async () => {
@@ -83,7 +83,7 @@ router.post('/message', async (req, res) => {
             {
                 conversationId: convId,
                 inputText: message,
-                model: 'gemini-2.0-flash',
+                model: 'gemini-2.5-flash-lite',
                 metadata: {
                     messageCount: history.length,
                     conversationId: convId
